@@ -1,0 +1,25 @@
+syntax = "proto3";
+
+package ratelimiter;
+
+service RateLimitService {
+  // Checks if a specific request should be allowed or throttled
+  rpc Check(RateLimitRequest) returns (RateLimitResponse);
+}
+
+message CheckRequest {
+  // The identifier (IP, API Key, or UserID)
+  string user_id = 1;
+  
+  // The specific endpoint or "domain" (e.g., "/api/v1/login")
+  string endpoint = 2;
+}
+
+message CheckResponse {
+  // True if allowed, False if rate-limited
+  bool allowed = 1;
+
+  // Useful for the Load Balancer to send back in HTTP headers
+  int32 remaining_tokens = 2;
+  int64 reset_time_unix = 3; // When the window resets or bucket refills
+}

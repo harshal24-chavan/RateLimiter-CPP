@@ -1,0 +1,10 @@
+{
+  "name": "cpp-rate-limiter",
+  "version": "0.1.0",
+  "dependencies": [
+    "grpc",
+    "protobuf",
+    "redis-plus-plus",
+    "tomlplusplus"
+  ]
+}

@@ -17,11 +17,11 @@ struct RuleConfig {
     int time_limit;            // The value (e.g., 5)
     std::string time_unit;     // The unit (e.g., "minutes")
     
-    // Token Bucket specific (optional/defaulted)
+    // Token Bucket specific 
     int refill_rate;           // How many tokens added per unit
 };
 
-// This is your top-level Config
+// top-level Config
 struct RateLimiterConfig {
     std::string host;
     int port;
@@ -35,6 +35,6 @@ struct RateLimiterConfig {
  *
  * @param filename The path to the .toml file.
  * @return An AppConfig struct populated with values from the file.
- * If parsing fails, it returns an AppConfig with default values.
+ * If parsing fails, it returns an Config with default values.
  */
 RateLimiterConfig parseTomlFile(const std::string& filename);
