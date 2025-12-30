@@ -9,7 +9,7 @@ struct RateLimitResult{
 
 class IRateLimitStrategy{
   public:
-    virtual bool isAllowed(const std::string& identifier) = 0;
+    virtual RateLimitResult isAllowed(const std::string& identifier) = 0;
     virtual ~IRateLimitStrategy() = default;
 };
 

@@ -1,5 +1,8 @@
 #include "FixedWindowLimit.h"
 #include <chrono>
+#include <iterator>
+#include <string>
+#include <vector>
 
 // The Lua script ensures atomicity: Increment and Expire happen together.
 // KEYS[1] = identifier (the Redis key)
@@ -14,40 +17,36 @@ const std::string FIXED_WINDOW_LUA = R"(
     return {current, ttl}
 )";
 
-FixedWindow::FixedWindow(std::shared_ptr<sw::redis::Redis> redis, 
-                         const std::string& endpoint, 
-                         int limit, 
-                         int window_seconds)
-    : _redis(redis), _endpoint(endpoint), _limit(limit), _window_seconds(window_seconds) {
-    
-    // Pre-load the script into Redis once to get the SHA1 hash for faster execution
-    _script_sha = _redis->script_load(FIXED_WINDOW_LUA);
-}
+FixedWindow::FixedWindow(std::shared_ptr<sw::redis::Redis> redis,
+    const std::string &endpoint, int limit,
+    int window_seconds)
+  : _redis(redis), _endpoint(endpoint), _limit(limit),
+  _window_seconds(window_seconds) {}
 
-RateLimitResult FixedWindow::isAllowed(const std::string& identifier) {
-    // 1. Construct a unique key for this user/endpoint combination
-    std::string redis_key = "rl:fixed:" + _endpoint + ":" + identifier;
+RateLimitResult FixedWindow::isAllowed(const std::string &identifier) {
+  // 1. Construct a unique key for this user/endpoint combination
+  std::string redis_key = "rl:fixed:" + _endpoint + ":" + identifier;
 
-    try {
-        // 2. Execute the pre-loaded Lua script
-        // evalsha(sha, keys_list, args_list)
-        auto result = _redis->evalsha(_script_sha, 
-                                      {redis_key}, 
-                                      {std::to_string(_window_seconds), std::to_string(_limit)});
+  try {
+    std::vector<std::string> keys = {redis_key};
+    std::vector<std::string> args = {std::to_string(_window_seconds)};
 
-        // 3. Parse the Redis response (Lua returns an array [count, ttl])
-        long long count = result.template get<long long>(0);
-        long long ttl = result.template get<long long>(1);
+    std::vector<long long> result;
+    _redis->eval(FIXED_WINDOW_LUA, keys.begin(), keys.end(), args.begin(), args.end(), std::back_inserter(result));
 
-        RateLimitResult res;
-        res.allowed = (count <= _limit);
-        res.remaining = std::max(0LL, (long long)_limit - count);
-        
-        return res;
 
-    } catch (const sw::redis::Error &e) {
-        // Fallback logic: If Redis is down, we usually fail-open (allow request)
-        // or log the error and deny. Here we fail-open for availability.
-        return {true, 0, 0};
-    }
+    long long count = result[0];
+    long long ttl = result[1];
+
+    RateLimitResult res;
+    res.allowed = (count <= _limit);
+    res.remaining = std::max(0LL, (long long)_limit - count);
+
+    return res;
+
+  } catch (const sw::redis::Error &e) {
+    // Fallback logic: If Redis is down, we usually fail-open (allow request)
+    // or log the error and deny. Here we fail-open for availability.
+    return {true, 0};
+  }
 }

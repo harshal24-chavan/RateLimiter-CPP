@@ -21,6 +21,7 @@ add_executable(RateLimiter
   src/main.cpp
   src/tomlParser.cpp
   src/FixedWindowLimit.cpp
+  src/RateLimitFactory.cpp
 )
 
 target_include_directories(RateLimiter PRIVATE 

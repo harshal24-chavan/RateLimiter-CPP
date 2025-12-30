@@ -15,34 +15,31 @@ RateLimiterConfig parseTomlFile(const std::string &filename) {
     // --- Safely get the settings ---
     // Use .value_or() for safety. It returns the default if the key isn't
     // found.
-    config.host = tbl["ratelimiter"]["host"].value_or("0.0.0.0");
-    config.port = tbl["ratelimiter"]["port"].value_or(18000);
-    config.redis_host = tbl["ratelimiter"]["redis_host"].value_or("0.0.0.0");
-    config.redis_port = tbl["ratelimiter"]["redis_port"].value_or(1000);
+    config.host = tbl["server"]["host"].value_or("0.0.0.0");
+    config.port = tbl["server"]["port"].value_or(18000);
+    config.redis_uri = tbl["redis"]["uri"].value_or("tcp://127.0.0.1:6379");
 
-    // --- Safely parse the 'array of tables' for Servers ---
-    // Note the capital 'S' in "Servers"
-    if (toml::array *rules_array = tbl["Rules"].as_array()) {
+    if (auto rules_array = tbl["rules"].as_array()) {
+      for (auto&& item : *rules_array) {
+        // 'item' is a table representing one rule
+        auto& table = *item.as_table();
 
-      rules_array->for_each([&](auto &&el) {
-        if (toml::table *rule_table = el.as_table()) {
+        RuleConfig rule;
+        rule.endpoint = table["endpoint"].value_or("default");
+        rule.strategy_type = table["strategy"].value_or("fixed_window");
+        rule.limit = table["limit"].value_or(10);
+        rule.window_seconds = table["window_seconds"].value_or(60);
 
-          // Safely get the "endpoint" string from within the table
-          if (auto endpoint_node = rule_table->get("endpoint")) {
-            if (auto endpoint_str = endpoint_node->value<std::string>()) {
-              std::cout<<*endpoint_str;
-              // config.serverList.push_back(*endpoint_str);
-            }
-          }
-        }
-      });
+        // Add to your list of rules
+        config.rules.push_back(rule);
+      }
     }
   } catch (const toml::parse_error &err) {
     std::cerr << "TOML parsing failed:\n" << err << "\n";
     std::cerr << "Using default configuration.\n";
   } catch (const std::exception &e) {
     std::cerr << "An error occurred during config parsing: " << e.what()
-              << std::endl;
+      << std::endl;
     std::cerr << "Using default configuration.\n";
   }
 
