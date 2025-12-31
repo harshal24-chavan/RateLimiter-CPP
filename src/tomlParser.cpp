@@ -17,7 +17,10 @@ RateLimiterConfig parseTomlFile(const std::string &filename) {
     // found.
     config.host = tbl["server"]["host"].value_or("0.0.0.0");
     config.port = tbl["server"]["port"].value_or(18000);
+
     config.redis_uri = tbl["redis"]["uri"].value_or("tcp://127.0.0.1:6379");
+    config.redis_host = tbl["redis"]["redis_host"].value_or("127.0.0.1");
+    config.redis_port = tbl["redis"]["redis_port"].value_or(6379);
 
     if (auto rules_array = tbl["rules"].as_array()) {
       for (auto&& item : *rules_array) {

@@ -17,11 +17,13 @@ struct RuleConfig {
 
 // top-level Config
 struct RateLimiterConfig {
-    std::string host;
-    int port;
-    std::string redis_uri;
-    
-    std::vector<RuleConfig> rules; // Allow for multiple endpoints!
+  std::string host;
+  int port;
+  std::string redis_uri;
+  std::string redis_host;
+  int redis_port;
+
+  std::vector<RuleConfig> rules; // Allow for multiple endpoints!
 };
 /**
  * @brief Parses a TOML configuration file.
@@ -30,4 +32,4 @@ struct RateLimiterConfig {
  * @return An AppConfig struct populated with values from the file.
  * If parsing fails, it returns an Config with default values.
  */
-RateLimiterConfig parseTomlFile(const std::string& filename);
+RateLimiterConfig parseTomlFile(const std::string &filename);

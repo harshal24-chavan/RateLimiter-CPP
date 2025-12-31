@@ -1,6 +1,26 @@
 services:
   redis:
     image: redis:7.0-alpine
+    container_name: ratelimiter-db
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - rl-network
+
+  app:
+    build: .
+    container_name: ratelimiter-app
+    depends_on:
+      redis:
+        condition: service_healthy  # Waits for the ping to pass
     ports:
-      - "6379:6379"
-    # This allows you to persistence data or add a custom redis.conf later
+      - "50051:50051"
+    networks:
+      - rl-network
+
+networks:
+  rl-network:
+    driver: bridge

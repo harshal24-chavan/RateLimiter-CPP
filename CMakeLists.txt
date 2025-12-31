@@ -78,3 +78,23 @@ target_link_libraries(RateLimiter PRIVATE
   protobuf::libprotobuf
   tomlplusplus::tomlplusplus
 )
+
+
+# Add the client executable
+add_executable(TestClient 
+    src/client_test.cpp 
+    "${GEN_PB_SRC}" 
+    "${GEN_GRPC_SRC}"
+)
+
+# Link the client to the same libraries
+target_link_libraries(TestClient PRIVATE 
+    gRPC::grpc++
+    protobuf::libprotobuf
+)
+
+# Include the headers
+target_include_directories(TestClient PRIVATE 
+    "${CMAKE_CURRENT_SOURCE_DIR}/include"
+    "${CMAKE_CURRENT_BINARY_DIR}"
+)

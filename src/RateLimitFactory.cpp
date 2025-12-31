@@ -5,7 +5,7 @@
 #include "TokenBucket.h"
 
 std::unique_ptr<IRateLimitStrategy> RateLimitFactory::createStrategy(const RuleConfig& config, std::shared_ptr<sw::redis::Redis> redis){
-  if(config.strategy_type == "FixedWindow"){
+  if(config.strategy_type == "fixed_window"){
     return std::make_unique<FixedWindow>(
         redis, 
         config.endpoint,
