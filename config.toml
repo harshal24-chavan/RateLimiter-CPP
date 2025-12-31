@@ -1,4 +1,3 @@
-# Global Server Configuration
 [server]
 host = "0.0.0.0"
 port = 50051
@@ -6,8 +5,6 @@ port = 50051
 [redis]
 uri = "tcp://127.0.0.1:6379"
 
-# Rate Limiting Rules (Array of Tables)
-# Each [[rules]] block represents one RuleConfig object
 [[rules]]
 endpoint = "/api/v1/login"
 strategy = "fixed_window"
@@ -16,12 +13,6 @@ window_seconds = 60
 
 [[rules]]
 endpoint = "/api/v1/search"
-strategy = "fixed_window"
-limit = 100
-window_seconds = 3600
-
-[[rules]]
-endpoint = "default"
-strategy = "fixed_window"
-limit = 1000
-window_seconds = 86400
+strategy = "token_bucket"
+limit = 10
+window_seconds = 1  # For token bucket, this acts as refill rate

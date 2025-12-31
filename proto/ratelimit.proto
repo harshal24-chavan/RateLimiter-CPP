@@ -4,7 +4,7 @@ package ratelimiter;
 
 service RateLimitService {
   // Checks if a specific request should be allowed or throttled
-  rpc Check(RateLimitRequest) returns (RateLimitResponse);
+  rpc Check(CheckRequest) returns (CheckResponse);
 }
 
 message CheckRequest {
@@ -21,5 +21,4 @@ message CheckResponse {
 
   // Useful for the Load Balancer to send back in HTTP headers
   int32 remaining_tokens = 2;
-  int64 reset_time_unix = 3; // When the window resets or bucket refills
 }
