@@ -115,7 +115,7 @@ Use `ghz` to measure throughput and tail latency (p99):
 
 ```bash
 ghz --insecure \
-    --proto ./proto/ratelimiter.proto \
+    --proto ./proto/ratelimit.proto \
     --call ratelimiter.RateLimitService/Check \
     -d '{"user_id":"bench_user","endpoint":"/api/v1/login"}' \
     -n 20000 -c 50 \
