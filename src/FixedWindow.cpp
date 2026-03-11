@@ -1,52 +1,51 @@
 #include "FixedWindow.h"
 #include <chrono>
-#include <iterator>
+#include <cstdint>
+#include <mutex>
 #include <string>
-#include <vector>
 
-// The Lua script ensures atomicity: Increment and Expire happen together.
-// KEYS[1] = identifier (the Redis key)
-// ARGV[1] = window size in seconds
-// ARGV[2] = max limit
-const std::string FIXED_WINDOW_LUA = R"(
-    local current = redis.call('INCR', KEYS[1])
-    if current == 1 then
-        redis.call('EXPIRE', KEYS[1], ARGV[1])
-    end
-    local ttl = redis.call('TTL', KEYS[1])
-    return {current, ttl}
-)";
+FixedWindow::FixedWindow(const std::string &endpoint, int limit,
+                         int window_seconds)
+    : _endpoint(endpoint), _limit(limit), _window_seconds(window_seconds) {
 
-FixedWindow::FixedWindow(std::shared_ptr<sw::redis::Redis> redis,
-    const std::string &endpoint, int limit,
-    int window_seconds)
-  : _redis(redis), _endpoint(endpoint), _limit(limit),
-  _window_seconds(window_seconds) {}
+  // resizing  to secure 16 shard spaces
+  shards = std::make_unique<std::array<Shard, numOfShards>>();
+}
 
-RateLimitResult FixedWindow::isAllowed(const std::string &identifier) {
-  // 1. Construct a unique key for this user/endpoint combination
-  std::string redis_key = "rl:fixed:" + _endpoint + ":" + identifier;
+RateLimitResult FixedWindow::isAllowed(uint64_t userHash) {
+  // get map shard
+  size_t shardIndex = (numOfShards - 1) & userHash;
+  Shard &shard = (*shards)[shardIndex];
 
-  try {
-    std::vector<std::string> keys = {redis_key};
-    std::vector<std::string> args = {std::to_string(_window_seconds)};
+  // locking the mutex for this particular map
+  // so that other maps are readily available
+  std::lock_guard<std::mutex> lck(shard.mtx);
 
-    std::vector<long long> result;
-    _redis->eval(FIXED_WINDOW_LUA, keys.begin(), keys.end(), args.begin(), args.end(), std::back_inserter(result));
+  // Reset: If time has moved to a new window, clear this shard
+  int64_t currentWindow = getCurrentWindowId();
+  if (currentWindow > shard.lastWindowId) {
+    shard.countMap.clear();
+    shard.lastWindowId = currentWindow;
+  }
 
+  uint32_t &count = shard.countMap[userHash];
+  // only allow if the count is within limit
+  if (count < static_cast<uint32_t>(_limit)) {
+    count++;
+    return {true, _limit - static_cast<int>(count)};
+  }
 
-    long long count = result[0];
-    long long ttl = result[1];
+  return {false, 0};
+}
+void FixedWindow::updateGlobalCount(uint64_t userHash, uint32_t globalCount) {
+  size_t idx = userHash & (numOfShards - 1);
+  auto &shard = (*shards)[idx];
 
-    RateLimitResult res;
-    res.allowed = (count <= _limit);
-    res.remaining = std::max(0LL, (long long)_limit - count);
+  std::lock_guard<std::mutex> lock(shard.mtx);
 
-    return res;
-
-  } catch (const sw::redis::Error &e) {
-    // Fallback logic: If Redis is down, we usually fail-open (allow request)
-    // or log the error and deny. Here we fail-open for availability.
-    return {true, 0};
+  // Only update if Redis has a "more recent" (higher) count than our local
+  // cache
+  if (globalCount > shard.countMap[userHash]) {
+    shard.countMap[userHash] = globalCount;
   }
 }

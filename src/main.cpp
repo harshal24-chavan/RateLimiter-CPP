@@ -1,61 +1,86 @@
 #include <grpcpp/grpcpp.h>
+#include <grpcpp/resource_quota.h>
 // #include <iostream>
+#include <iostream>
+#include <limits>
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <utility>
 
 // Your project headers
+#include "EndPointRegistry.h"
+#include "HashUtils.h"
 #include "IRateLimitStrategy.h"
 #include "RateLimitFactory.h"
+#include "SyncManager.h"
 #include "ratelimit.grpc.pb.h"
 #include "tomlParser.h"
+
+struct EndpointContext {
+  uint32_t id;
+  std::unique_ptr<IRateLimitStrategy> strategy;
+};
 
 class RateLimitServiceImpl final
     : public ratelimiter::RateLimitService::Service {
 private:
-  std::unordered_map<std::string, std::unique_ptr<IRateLimitStrategy>>
-      &_strategies;
+  std::shared_ptr<std::unordered_map<std::string, EndpointContext>> _strategies;
+
+  std::shared_ptr<SyncManager> _syncManager;
 
 public:
   explicit RateLimitServiceImpl(
-      std::unordered_map<std::string, std::unique_ptr<IRateLimitStrategy>>
-          &strategies)
-      : _strategies(strategies) {}
+      std::shared_ptr<std::unordered_map<std::string, EndpointContext>>
+          strategies,
+      std::shared_ptr<SyncManager> syncManager)
+      : _strategies(std::move(strategies)),
+        _syncManager(std::move(syncManager)) {}
 
   // FIXED: Using CheckRequest and CheckResponse to match your .proto file
   grpc::Status Check(grpc::ServerContext *context,
                      const ratelimiter::CheckRequest *request,
                      ratelimiter::CheckResponse *response) override {
 
+    static thread_local size_t threadLane = std::numeric_limits<size_t>::max();
+    if (threadLane == std::numeric_limits<size_t>::max()) {
+      threadLane = _syncManager->getLane();
+    }
+
     const std::string &endpoint = request->endpoint();
     const std::string &user_id = request->user_id();
 
-    // DIAGNOSTIC LOG 1
-    // std::cout << "[Request] User: " << user_id << " | Endpoint: " << endpoint
-    // << std::endl;
-
-    auto it = _strategies.find(endpoint);
-
-    // Fallback logic
-    if (it == _strategies.end()) {
-      // std::cout << "[Warning] No specific strategy for " << endpoint
-      // << ". Checking default..." << std::endl;
-      it = _strategies.find("default");
+    // Perform a single lookup
+    auto it = _strategies->find(endpoint);
+    if (it == _strategies->end()) {
+      it = _strategies->find("default");
     }
 
-    if (it != _strategies.end()) {
-      RateLimitResult result = it->second->isAllowed(user_id);
+    uint32_t epID = 0; // Default or fallback ID
 
-      // DIAGNOSTIC LOG 2
-      // std::cout << "[Result] Allowed: " << (result.allowed ? "YES" : "NO")
-      // << " | Remaining: " << result.remaining << std::endl;
+    if (it != _strategies->end()) {
+      uint64_t hashedUserId =
+          HashUtils::hashID(user_id); // get the hashed user_id
+
+      // Access the strategy inside the context
+      RateLimitResult result = it->second.strategy->isAllowed(hashedUserId);
+      epID = it->second.id; // Use the ID we already stored in the context!
 
       response->set_allowed(result.allowed);
       response->set_remaining_tokens(result.remaining);
+
+      // Only sync to Redis if the request was actually processed/allowed
+      if (result.allowed) {
+        uint64_t hashedUser = HashUtils::hashID(user_id);
+        SyncTask st = {hashedUser, epID, 1};
+
+        // Push to SPSC Queue (The Producer side of the pipe)
+        if (!_syncManager->pushTask(threadLane, st)) {
+          // Optional: handle full queue (e.g., log dropped sync)
+        }
+      }
     } else {
-      // DIAGNOSTIC LOG 3
-      // std::cout << "[Critical] No strategy found at all! Falling open."
-      // << std::endl;
+      // Fallback if not even "default" exists
       response->set_allowed(true);
       response->set_remaining_tokens(-1);
     }
@@ -72,14 +97,12 @@ int main(int argc, char **argv) {
     configPath = argv[1];
   }
 
-  // std::cout << "--- Initializing Rate Limiter Server ---" << std::endl;
-
   // 1. Load Configuration
   std::vector<RuleConfig> rules;
   std::string redis_uri;
   int port;
   std::string redis_host;
-  int redis_port;
+  int redis_port(6379);
 
   try {
 
@@ -98,9 +121,17 @@ int main(int argc, char **argv) {
 
   // 2. Initialize Redis
   sw::redis::ConnectionPoolOptions pool_opts;
-  pool_opts.size = 20; // Allow 20 concurrent connections to Redis
+  pool_opts.size = 1; // Allow 1 concurrent connections to Redis
 
   sw::redis::ConnectionOptions connection_opts;
+  // keep alive should be true in order to use that same connection and no
+  // handshakes again
+  connection_opts.keep_alive = true;
+  // low socket_timeout because we do not want the spsc queue to fill and wait
+  // for long time if connection fails
+  using namespace std::chrono_literals;
+  connection_opts.socket_timeout = 50ms;
+
   connection_opts.host = redis_host;
   connection_opts.port = redis_port;
 
@@ -116,28 +147,38 @@ int main(int argc, char **argv) {
   }
 
   // 3. Build Strategy Map using the Factory
-  std::unordered_map<std::string, std::unique_ptr<IRateLimitStrategy>>
-      strategyMap;
+  auto epRegistry = std::make_shared<EndPointRegistry>(rules);
+
+  auto strategyMap =
+      std::make_shared<std::unordered_map<std::string, EndpointContext>>();
+
   for (const auto &rule : rules) {
     auto strategy = RateLimitFactory::createStrategy(rule, redis);
     if (strategy) {
-      // std::cout << "[Factory] Created " << rule.strategy_type << " for "
-      // << rule.endpoint << std::endl;
-      strategyMap[rule.endpoint] = std::move(strategy);
+      std::cout << rule.endpoint << std::endl;
+
+      (*strategyMap)[rule.endpoint] = {epRegistry->getId(rule.endpoint),
+                                       std::move(strategy)};
     }
   }
 
   // 4. Start gRPC Server
+  size_t threadCount = 3;
+  std::shared_ptr<SyncManager> syncManager =
+      std::make_shared<SyncManager>(3, rules.size(), redis, epRegistry);
   std::string server_address = "0.0.0.0:" + std::to_string(port);
-  RateLimitServiceImpl service(strategyMap);
+  RateLimitServiceImpl service(strategyMap, syncManager);
+
+  // 3 threads for GRPC server and 1 thread for SyncManager to sync with redis
+  grpc::ResourceQuota rq;
+  rq.SetMaxThreads(3);
 
   grpc::ServerBuilder builder;
   builder.AddListeningPort(server_address, grpc::InsecureServerCredentials());
+  builder.SetResourceQuota(rq);
   builder.RegisterService(&service);
 
   std::unique_ptr<grpc::Server> server(builder.BuildAndStart());
-  // std::cout << "[Server] gRPC Server listening on " << server_address
-  // << std::endl;
 
   // Wait for the server to shut down
   server->Wait();

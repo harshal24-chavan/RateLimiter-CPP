@@ -1,24 +1,24 @@
 cmake_minimum_required(VERSION 3.10)
 project(RateLimiter)
 
-# --- 1. C++ Standard ---
-# Using C++20 for modern features like std::chrono improvements
+# --- 1. C++ Standard & Performance ---
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# Optimization for the i3-540
+set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3 -march=native -pthread")
+
 # --- 2. Custom Find Scripts ---
-# Tells CMake to look in your 'cmake' folder for Findhiredis.cmake
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
-# --- 3. Find Dependencies (Installed via pacman) ---
+# --- 3. Find Dependencies ---
 find_package(hiredis REQUIRED)
 find_package(redis++ CONFIG REQUIRED)
 find_package(gRPC CONFIG REQUIRED)
 find_package(Protobuf REQUIRED)
 find_package(tomlplusplus CONFIG REQUIRED)
 
-# --- 4. Locate Tools (The "Build Boss" Step) ---
-# We find the actual paths of the compilers on your system
+# --- 4. Locate Protoc/gRPC Tools ---
 find_program(PROTOC_EXECUTABLE protoc)
 find_program(GRPC_CPP_PLUGIN_EXECUTABLE grpc_cpp_plugin)
 
@@ -28,15 +28,12 @@ endif()
 
 # --- 5. Define Proto Paths ---
 set(proto_file "${CMAKE_CURRENT_SOURCE_DIR}/proto/ratelimit.proto")
-
-# These variables define where the generated C++ files will live
 set(GEN_PB_SRC "${CMAKE_CURRENT_BINARY_DIR}/ratelimit.pb.cc")
 set(GEN_PB_HDR "${CMAKE_CURRENT_BINARY_DIR}/ratelimit.pb.h")
 set(GEN_GRPC_SRC "${CMAKE_CURRENT_BINARY_DIR}/ratelimit.grpc.pb.cc")
 set(GEN_GRPC_HDR "${CMAKE_CURRENT_BINARY_DIR}/ratelimit.grpc.pb.h")
 
 # --- 6. Automate Code Generation ---
-# This runs 'protoc' to turn your .proto into C++ code before compiling
 add_custom_command(
     OUTPUT "${GEN_PB_SRC}" "${GEN_PB_HDR}" "${GEN_GRPC_SRC}" "${GEN_GRPC_HDR}"
     COMMAND ${PROTOC_EXECUTABLE}
@@ -50,51 +47,49 @@ add_custom_command(
     VERBATIM
 )
 
-# --- 7. Define the Executable ---
-# List every .cpp file here. If you add a new strategy, add its .cpp here too.
-add_executable(RateLimiter 
-  src/main.cpp
-  src/tomlParser.cpp
-  src/FixedWindow.cpp
-  src/TokenBucket.cpp
-  src/RateLimitFactory.cpp
-  "${GEN_PB_SRC}"   # Include the generated code
-  "${GEN_GRPC_SRC}" # Include the generated code
+# --- 7. Define the Core Library (Logic Only) ---
+# We use STATIC library so multiple executables can use these objects.
+# Note: src/main.cpp is EXCLUDED from the library.
+add_library(rl_core STATIC
+    src/tomlParser.cpp
+    src/FixedWindow.cpp
+    src/TokenBucket.cpp
+    src/RateLimitFactory.cpp
+    "${GEN_PB_SRC}"   
+    "${GEN_GRPC_SRC}" 
 )
 
-# --- 8. Include Directories ---
-# Tells the compiler where to find your .h files
-target_include_directories(RateLimiter PRIVATE 
-  "${CMAKE_CURRENT_SOURCE_DIR}/include"
-  "${CMAKE_CURRENT_BINARY_DIR}" # For the generated headers
+# --- 8. Library Include Directories ---
+target_include_directories(rl_core PUBLIC 
+    "${CMAKE_CURRENT_SOURCE_DIR}/include"
+    "${CMAKE_CURRENT_BINARY_DIR}" 
 )
 
-# --- 9. Linking (The "Glue" Step) ---
-# Connects your code to the libraries
-target_link_libraries(RateLimiter PRIVATE 
-  redis++::redis++
-  hiredis::hiredis
-  gRPC::grpc++
-  protobuf::libprotobuf
-  tomlplusplus::tomlplusplus
-)
-
-
-# Add the client executable
-add_executable(TestClient 
-    src/client_test.cpp 
-    "${GEN_PB_SRC}" 
-    "${GEN_GRPC_SRC}"
-)
-
-# Link the client to the same libraries
-target_link_libraries(TestClient PRIVATE 
+# --- 9. Library Linking ---
+target_link_libraries(rl_core PUBLIC 
+    redis++::redis++
+    hiredis::hiredis
     gRPC::grpc++
     protobuf::libprotobuf
+    tomlplusplus::tomlplusplus
 )
 
-# Include the headers
-target_include_directories(TestClient PRIVATE 
-    "${CMAKE_CURRENT_SOURCE_DIR}/include"
-    "${CMAKE_CURRENT_BINARY_DIR}"
-)
+# --- 10. Define the Executables ---
+
+# Main Server (Contains its own main.cpp)
+add_executable(RateLimiterServer src/main.cpp)
+target_link_libraries(RateLimiterServer PRIVATE rl_core)
+
+# Unit Tests (Contains tests/FixedWindowTests.cpp's main)
+add_executable(unit_tests tests/FixedWindowTest.cpp)
+target_link_libraries(unit_tests PRIVATE rl_core)
+
+# Benchmark (Contains benchmarks/FixedWindowBench.cpp's main)
+add_executable(bench_fixed_window benchmarks/FixedWindowBench.cpp)
+target_link_libraries(bench_fixed_window PRIVATE rl_core)
+
+# Optional: Test Client
+# if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/src/client_test.cpp")
+#     add_executable(TestClient src/client_test.cpp)
+#     target_link_libraries(TestClient PRIVATE rl_core)
+# endif()
