@@ -3,9 +3,14 @@
 #include "SpscQueue.hpp"
 #include "SyncTask.h"
 #include <atomic>
+#include <charconv>
 #include <chrono>
+#include <iterator>
 #include <memory>
+#include <optional>
 #include <stdexcept>
+#include <string>
+#include <string_view>
 #include <unistd.h>
 #include <unordered_map>
 #include <utility>
@@ -64,7 +69,7 @@ public:
   }
 
   void run() {
-    // 1. Pre-allocate ONCE outside the loop
+    // Pre-allocate space ONCE outside the loop
     std::vector<std::unordered_map<uint64_t, uint32_t>> aggregationTable(
         endpointCount);
     for (auto &map : aggregationTable)
@@ -78,7 +83,7 @@ public:
     while (true) { // Keep the thread alive!
       bool activity = false;
 
-      // 2. Visiting every queue (Producer Lane)
+      // Visiting every queue (Producer Lane)
       for (auto &lane : queueList) {
         SyncTask task;
         while (lane->pop(task)) {
@@ -141,6 +146,41 @@ public:
     }
     if (hasData) {
       pipe.exec();
+    }
+  }
+
+  void pullGlobalStates(
+      std::vector<std::pair<std::string, uint64_t>> priorityUsers) {
+    std::vector<std::string> keys;
+    keys.reserve(priorityUsers.size());
+
+    // predefined points in a key
+    std::string_view rl = "rl:";
+    std::string_view colon = ":";
+
+    for (const auto &[ep, userID] : priorityUsers) {
+
+      const size_t bufferSize = 21;
+      char buffer[bufferSize];
+
+      std::to_chars_result res =
+          std::to_chars(buffer, buffer + bufferSize, userID);
+      std::string_view userID_string(buffer, res.ptr - buffer);
+
+      // key creation
+      size_t size = rl.size() + colon.size() + ep.size() + userID_string.size();
+      std::string k;
+      k.reserve(size);
+      k.append(rl).append(ep).append(colon).append(userID_string);
+
+      keys.emplace_back(k);
+    }
+
+    // pulling the global truth
+    std::vector<std::optional<std::string>> res;
+    _redis->mget(keys.begin(), keys.end(), std::back_inserter(res));
+
+    for (size_t ind = 0; ind < res.size(); ind++) {
     }
   }
 };

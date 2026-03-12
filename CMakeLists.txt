@@ -89,7 +89,7 @@ add_executable(bench_fixed_window benchmarks/FixedWindowBench.cpp)
 target_link_libraries(bench_fixed_window PRIVATE rl_core)
 
 # Optional: Test Client
-# if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/src/client_test.cpp")
-#     add_executable(TestClient src/client_test.cpp)
-#     target_link_libraries(TestClient PRIVATE rl_core)
-# endif()
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/src/client_test.cpp")
+    add_executable(TestClient src/client_test.cpp)
+    target_link_libraries(TestClient PRIVATE rl_core)
+endif()
