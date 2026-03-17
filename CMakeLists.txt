@@ -6,7 +6,7 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # Optimization for the i3-540
-set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3 -march=native -pthread")
+set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE}  -march=native -pthread")
 
 # --- 2. Custom Find Scripts ---
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
@@ -55,6 +55,7 @@ add_library(rl_core STATIC
     src/FixedWindow.cpp
     src/TokenBucket.cpp
     src/RateLimitFactory.cpp
+    src/GRPC-RateLimiter.cpp
     "${GEN_PB_SRC}"   
     "${GEN_GRPC_SRC}" 
 )

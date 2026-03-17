@@ -20,6 +20,8 @@
 
 class SyncManager {
 private:
+  std::atomic<bool> running{true};
+
   std::shared_ptr<sw::redis::Redis> _redis;
   std::shared_ptr<EndPointRegistry> _endPointRegistry;
   // and it would also be required for pop function in redis consumer
@@ -48,6 +50,8 @@ public:
       queueList.emplace_back(std::make_unique<SPSCQueue<SyncTask>>());
     }
   }
+
+  ~SyncManager() { running = false; }
 
   size_t getLane() {
 
@@ -80,7 +84,7 @@ public:
     // {endpoint, userId}
     std::vector<std::pair<std::string, uint64_t>> priorityUsers;
 
-    while (true) { // Keep the thread alive!
+    while (running.load(std::memory_order_relaxed)) { // Keep the thread alive!
       bool activity = false;
 
       // Visiting every queue (Producer Lane)
@@ -175,6 +179,9 @@ public:
 
       keys.emplace_back(k);
     }
+
+    // clearing space otherwise it will occupy all the ram
+    priorityUsers.clear();
 
     // pulling the global truth
     std::vector<std::optional<std::string>> res;

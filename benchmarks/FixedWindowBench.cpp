@@ -10,8 +10,10 @@
  * Benchmark Configuration
  */
 const uint64_t TOTAL_REQUESTS_PER_THREAD = 10'000'000;
-const int NUM_THREADS = 4; // Matching your i3-540 (2 Cores, 4 Threads)
-const uint32_t LIMIT = 1'000'000;
+const int NUM_THREADS = 2; // Matching your i3-540 (2 Cores, 4 Threads)
+// const uint32_t LIMIT = 1'000'000;
+const uint32_t LIMIT = 1'000;
+
 const uint32_t WINDOW = 60;
 
 void run_bench(FixedWindow &fw, int thread_id,
@@ -24,7 +26,7 @@ void run_bench(FixedWindow &fw, int thread_id,
   for (uint64_t i = 0; i < TOTAL_REQUESTS_PER_THREAD; ++i) {
     // We use (i + thread_id) to ensure threads hit different shards
     // but also overlap occasionally to test lock contention.
-    uint64_t user_hash = i + (thread_id * 1000);
+    uint64_t user_hash = (thread_id * 1000 + i);
 
     if (fw.isAllowed(user_hash).allowed) {
       allowed_count++;
@@ -75,6 +77,7 @@ int main() {
 
   std::cout << "-------------------------------------------------------"
             << std::endl;
+  std::cout << "Limit:          " << LIMIT << std::endl;
   std::cout << "Total Requests: " << TOTAL_REQUESTS_PER_THREAD * NUM_THREADS
             << std::endl;
   std::cout << "Total Allowed:  " << total_allowed.load() << std::endl;

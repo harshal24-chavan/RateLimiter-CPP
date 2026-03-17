@@ -16,9 +16,9 @@ fi
 
 cd "$BUILD_DIR"
 
-# 4. Configure with CMake (Force Release mode for performance)
-echo "--- Configuring Project (Release Mode) ---"
-cmake -DCMAKE_BUILD_TYPE=Release ..
+# 4. Configure with CMake (Force Debug mode for debugging)
+echo "--- Configuring Project (Debug Mode) ---"
+cmake -DCMAKE_BUILD_TYPE=Debug ..
 
 # 5. Build the Project
 echo "--- Compiling with multiple Threads ---"

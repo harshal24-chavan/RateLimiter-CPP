@@ -1,5 +1,5 @@
 [server]
-host = "0.0.0.0"
+host = "unix:///tmp/rl.sock"
 port = 50051
 
 [redis]
@@ -11,11 +11,19 @@ uri = "tcp://127.0.0.1:6379"
 [[rules]]
 endpoint = "/api/v1/login"
 strategy = "fixed_window"
-limit = 1000000
+limit = 100
 window_seconds = 60
+
 
 [[rules]]
 endpoint = "/api/v1/search"
+strategy = "fixed_window"
+limit = 1000
+window_seconds = 60
+
+
+[[rules]]
+endpoint = "/api/v1/tempBlock"
 strategy = "token_bucket"
 limit = 10
 window_seconds = 1  # For token bucket, this acts as refill rate

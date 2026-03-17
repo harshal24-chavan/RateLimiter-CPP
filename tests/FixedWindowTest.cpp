@@ -34,8 +34,33 @@ void test_window_reset() {
   std::cout << "Window Reset Test: PASSED\n";
 }
 
+void test_fixed_window_limit() {
+  std::cout << "Testing Fixed Window (Limit: 10)..." << std::endl;
+  FixedWindow strategy("abc", 10, 20);
+  uint64_t user = 12345;
+
+  // 1. Verify success for the first 10
+  for (int i = 0; i < 10; ++i) {
+    if (strategy.isAllowed(user).allowed != true) {
+      std::cout << "FAILED: Request " << (i + 1) << " should have been allowed!"
+                << std::endl;
+      return;
+    }
+  }
+
+  // 2. Verify failure for the 11th request
+  if (strategy.isAllowed(user).allowed == true) {
+    std::cout << "FAILED: Request 11 should have been BLOCKED!" << std::endl;
+    return;
+  }
+
+  std::cout << "Unit Test: PASSED (10 allowed, 11th blocked)" << std::endl;
+}
+
 int main() {
   test_basic_limit();
   test_window_reset();
+
+  test_fixed_window_limit();
   return 0;
 }

@@ -1,6 +1,7 @@
 #pragma once
 #include "IRateLimitStrategy.h"
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <unordered_map>
@@ -11,7 +12,7 @@ struct Shard {
   // to prevent False Sharing
   alignas(64) std::mutex mtx;
   std::unordered_map<uint64_t, uint32_t> countMap;
-  int64_t lastWindowId = 0;
+  uint64_t lastWindowId = 0;
 };
 
 class FixedWindow : public IRateLimitStrategy {

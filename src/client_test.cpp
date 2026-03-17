@@ -1,4 +1,4 @@
-#include "ratelimit.grpc.pb.h"
+#include "ratelimit.grpc.pb.h" // Ensure this matches your filename
 #include <atomic>
 #include <chrono>
 #include <grpcpp/grpcpp.h>
@@ -13,153 +13,159 @@ using grpc::ClientAsyncResponseReader;
 using grpc::ClientContext;
 using grpc::CompletionQueue;
 using grpc::Status;
-using ratelimiter::CheckRequest;
-using ratelimiter::CheckResponse;
+// Note the updated types from your .proto
+using ratelimiter::BatchCheckRequest;
+using ratelimiter::BatchCheckResponse;
 using ratelimiter::RateLimitService;
 
+// Adjust these for the "sweet spot" on your i3-540
+const int BATCH_SIZE = 100;
+const int MAX_IN_FLIGHT_BATCHES = 50;
+
 struct AsyncClientCall {
-  ratelimiter::CheckResponse response;
-  grpc::ClientContext context;
-  grpc::Status status;
-  std::unique_ptr<grpc::ClientAsyncResponseReader<ratelimiter::CheckResponse>>
+  BatchCheckResponse response;
+  ClientContext context;
+  Status status;
+  std::unique_ptr<ClientAsyncResponseReader<BatchCheckResponse>>
       response_reader;
 };
 
-class RateLimitClient {
-public:
-  RateLimitClient(std::shared_ptr<Channel> channel)
-      : stub_(RateLimitService::NewStub(channel)) {}
-
-  // Minimal overhead call for benchmarking
-  bool CheckRateLimit(const std::string &user, const std::string &endpoint) {
-    CheckRequest request;
-    request.set_user_id(user);
-    request.set_endpoint(endpoint);
-
-    CheckResponse response;
-    ClientContext context;
-
-    Status status = stub_->Check(&context, request, &response);
-    return status.ok() && response.allowed();
-  }
-
-private:
-  std::unique_ptr<RateLimitService::Stub> stub_;
-};
-
-// Use an atomic to track how many requests are currently in the air
-std::atomic<int> in_flight{0};
-const int MAX_IN_FLIGHT = 100; // Adjust this: too high = freeze, too low = slow
-
-// Global counters for all threads
-std::atomic<uint64_t> total_requests(0);
-std::atomic<uint64_t> allowed_requests(0);
+// Global counters
+std::atomic<uint64_t> total_user_checks(0);
+std::atomic<uint64_t> allowed_user_checks(0);
+std::atomic<int> batches_in_flight{0};
 
 class RateLimitAsyncClient {
 public:
   explicit RateLimitAsyncClient(std::shared_ptr<Channel> channel)
       : stub_(RateLimitService::NewStub(channel)) {}
 
-  void Check(const std::string &user, const std::string &endpoint) {
-    ratelimiter::CheckRequest request;
-    request.set_user_id(user);
+  void CheckBatch(const std::vector<std::string> &users,
+                  const std::string &endpoint) {
+    BatchCheckRequest request;
     request.set_endpoint(endpoint);
+
+    // Fill the batch
+    for (const auto &user_id : users) {
+      auto *check = request.add_checks();
+      check->set_user_id(user_id);
+    }
 
     AsyncClientCall *call = new AsyncClientCall;
 
-    // 2. Now 'request' exists in this scope
+    // Use the new CheckBatch RPC
     call->response_reader =
-        stub_->PrepareAsyncCheck(&call->context, request, &cq_);
+        stub_->PrepareAsyncCheckBatch(&call->context, request, &cq_);
 
     call->response_reader->StartCall();
     call->response_reader->Finish(&call->response, &call->status, (void *)call);
   }
 
-  void AsyncCompleteRpc(int total_expected) {
+  void AsyncCompleteRpc(int total_expected_batches) {
     void *got_tag;
     bool ok = false;
-    int processed = 0;
+    int processed_batches = 0;
 
-    while (processed < total_expected && cq_.Next(&got_tag, &ok)) {
+    while (processed_batches < total_expected_batches &&
+           cq_.Next(&got_tag, &ok)) {
       AsyncClientCall *call = static_cast<AsyncClientCall *>(got_tag);
+
       if (ok && call->status.ok()) {
-        if (call->response.allowed())
-          allowed_requests++;
+        // Process each result in the batch response
+        for (const auto &res : call->response.results()) {
+          if (res.allowed()) {
+            allowed_user_checks++;
+          }
+        }
+      } else if (!call->status.ok()) {
+        std::cerr << "RPC Failed: " << call->status.error_message()
+                  << std::endl;
       }
+
       delete call;
-      in_flight--; // Request finished, open a slot
-      processed++;
+      batches_in_flight--;
+      processed_batches++;
     }
   }
 
 private:
   std::unique_ptr<RateLimitService::Stub> stub_;
-  CompletionQueue cq_; // The "Mailbox"
+  CompletionQueue cq_;
 };
 
-void run_async_benchmark(int thread_id, int total_reqs, std::string target) {
+void run_batch_benchmark(int thread_id, int total_users_to_check,
+                         std::string target) {
   auto channel =
       grpc::CreateChannel(target, grpc::InsecureChannelCredentials());
   RateLimitAsyncClient client(channel);
 
-  // Start reader thread - it now knows how many to expect
-  std::thread reader(&RateLimitAsyncClient::AsyncCompleteRpc, &client,
-                     total_reqs);
+  int total_batches = total_users_to_check / BATCH_SIZE;
 
-  std::string user = "user_" + std::to_string(thread_id);
+  // Reader thread expects total_batches
+  std::thread reader(&RateLimitAsyncClient::AsyncCompleteRpc, &client,
+                     total_batches);
+
   std::string endpoint = "/api/v1/login";
 
-  for (int i = 0; i < total_reqs; ++i) {
-    // BACKPRESSURE: If we have too many requests in-flight, wait.
-    // This stops your PC from hanging.
-    while (in_flight.load() >= MAX_IN_FLIGHT) {
+  for (int b = 0; b < total_batches; ++b) {
+    // Backpressure based on batches
+    while (batches_in_flight.load() >= MAX_IN_FLIGHT_BATCHES) {
       std::this_thread::yield();
     }
 
-    in_flight++;
-    client.Check(user, endpoint);
-    total_requests++;
+    std::vector<std::string> user_batch;
+    user_batch.reserve(BATCH_SIZE);
+
+    for (int i = 0; i < BATCH_SIZE; ++i) {
+      // Unique user IDs to avoid perfect cache hits if desired
+      user_batch.push_back("user_" + std::to_string(thread_id) + "_" +
+                           std::to_string(i * BATCH_SIZE));
+    }
+
+    batches_in_flight++;
+    client.CheckBatch(user_batch, endpoint);
+    total_user_checks += BATCH_SIZE;
   }
 
-  // Wait for the reader to finish processing all responses before destroying
-  // 'client'
   if (reader.joinable())
     reader.join();
 }
 
 int main(int argc, char **argv) {
-  int num_threads = 2;
-  int req_per_thread = 25000; // Adjust this to test longer durations
-  std::string target = "unix:///tmp/rl.sock";
-  ;
+  int num_threads =
+      2; // Try 2 threads first for the i3-540 (1 per physical core)
+  int users_per_thread = 500000;
 
-  std::cout << "Starting benchmark with " << num_threads << " threads..."
+  std::string target = "0.0.0.0:50051";
+  // std::string target = "unix:///tmp/rl.sock";
+
+  std::cout << "Starting Batch Benchmark..." << std::endl;
+  std::cout << "Batch Size: " << BATCH_SIZE << " | Threads: " << num_threads
             << std::endl;
-  std::cout << "Total targeted requests: " << (num_threads * req_per_thread)
-            << std::endl;
+  std::cout << "Total targeted user checks: "
+            << (num_threads * users_per_thread) << std::endl;
 
   std::vector<std::thread> threads;
   auto start = std::chrono::high_resolution_clock::now();
 
   for (int i = 0; i < num_threads; ++i) {
-    threads.emplace_back(run_async_benchmark, i, req_per_thread, target);
+    threads.emplace_back(run_batch_benchmark, i, users_per_thread, target);
   }
 
-  for (auto &t : threads) {
+  for (auto &t : threads)
     t.join();
-  }
 
   auto end = std::chrono::high_resolution_clock::now();
   std::chrono::duration<double> elapsed = end - start;
 
-  double rps = total_requests / elapsed.count();
+  double user_rps = total_user_checks / elapsed.count();
 
   std::cout << "-------------------------------------------" << std::endl;
   std::cout << "Benchmark Results:" << std::endl;
   std::cout << "Time elapsed:    " << elapsed.count() << "s" << std::endl;
-  std::cout << "Total Requests:  " << total_requests.load() << std::endl;
-  std::cout << "Total Allowed:   " << allowed_requests.load() << std::endl;
-  std::cout << "Throughput:      " << rps << " RPS" << std::endl;
+  std::cout << "Total User Checks: " << total_user_checks.load() << std::endl;
+  std::cout << "Total Allowed:     " << allowed_user_checks.load() << std::endl;
+  std::cout << "Throughput:        " << user_rps << " Users/sec" << std::endl;
   std::cout << "-------------------------------------------" << std::endl;
 
   return 0;

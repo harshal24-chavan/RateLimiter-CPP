@@ -1,8 +1,6 @@
 #include "FixedWindow.h"
-#include <chrono>
-#include <cstdint>
-#include <mutex>
-#include <string>
+#include <atomic>
+#include <iostream>
 
 FixedWindow::FixedWindow(const std::string &endpoint, int limit,
                          int window_seconds)
@@ -10,16 +8,28 @@ FixedWindow::FixedWindow(const std::string &endpoint, int limit,
 
   // resizing  to secure 16 shard spaces
   shards = std::make_unique<std::array<Shard, numOfShards>>();
+
+  std::cout << "FIXED WINDOW: [Endpoint: " << endpoint << "] [Limit:  " << limit
+            << "] [Window: " << window_seconds << "]" << std::endl;
 }
+
+std::atomic<int> cnt{0};
 
 RateLimitResult FixedWindow::isAllowed(uint64_t userHash) {
   // get map shard
   size_t shardIndex = (numOfShards - 1) & userHash;
   Shard &shard = (*shards)[shardIndex];
 
+  // std::cout << shardIndex << std::endl;
+
   // locking the mutex for this particular map
   // so that other maps are readily available
   std::lock_guard<std::mutex> lck(shard.mtx);
+
+  // if (cnt < 10) {
+  //   std::cout << userHash << " asdf " << shardIndex << std::endl;
+  //   cnt++;
+  // }
 
   // Reset: If time has moved to a new window, clear this shard
   int64_t currentWindow = getCurrentWindowId();

@@ -2,23 +2,29 @@ syntax = "proto3";
 
 package ratelimiter;
 
-service RateLimitService {
-  // Checks if a specific request should be allowed or throttled
-  rpc Check(CheckRequest) returns (CheckResponse);
-}
+// The individual check
+message IndividualCheck {
 
-message CheckRequest {
   // The identifier (IP, API Key, or UserID)
   string user_id = 1;
-  
-  // The specific endpoint or "domain" (e.g., "/api/v1/login")
-  string endpoint = 2;
 }
 
-message CheckResponse {
-  // True if allowed, False if rate-limited
-  bool allowed = 1;
+// The Batch Request
+message BatchCheckRequest {
+  string endpoint = 1;
+  repeated IndividualCheck checks = 2;
+}
 
-  // Useful for the Load Balancer to send back in HTTP headers
+// The individual result
+message IndividualResult {
+  bool allowed = 1;
   int32 remaining_tokens = 2;
+}
+
+// The Batch Response
+message BatchCheckResponse { repeated IndividualResult results = 1; }
+
+service RateLimitService {
+  // Batched RPC
+  rpc CheckBatch(BatchCheckRequest) returns (BatchCheckResponse) {}
 }
