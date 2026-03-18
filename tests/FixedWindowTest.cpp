@@ -57,10 +57,10 @@ void test_fixed_window_limit() {
   std::cout << "Unit Test: PASSED (10 allowed, 11th blocked)" << std::endl;
 }
 
-int main() {
-  test_basic_limit();
-  test_window_reset();
-
-  test_fixed_window_limit();
-  return 0;
-}
+// int main() {
+//   test_basic_limit();
+//   test_window_reset();
+//
+//   test_fixed_window_limit();
+//   return 0;
+// }

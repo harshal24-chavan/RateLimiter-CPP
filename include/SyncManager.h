@@ -28,12 +28,12 @@ public:
 
   // stop funciton to stop the run() infinite loop
   void stop();
+  void pullGlobalStates(
+      std::vector<std::pair<std::string, uint64_t>> &priorityUsers);
 
 private:
   // Internal helper functions
   void flushToRedis(std::vector<std::unordered_map<uint64_t, uint32_t>> &table);
-  void pullGlobalStates(
-      std::vector<std::pair<std::string, uint64_t>> &priorityUsers);
 
   std::atomic<bool> running{true};
   std::shared_ptr<sw::redis::Redis> _redis;

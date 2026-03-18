@@ -83,7 +83,7 @@ add_executable(RateLimiterServer src/main.cpp)
 target_link_libraries(RateLimiterServer PRIVATE rl_core)
 
 # Unit Tests (Contains tests/FixedWindowTests.cpp's main)
-add_executable(unit_tests tests/FixedWindowTest.cpp)
+add_executable(unit_tests tests/FixedWindowTest.cpp tests/test_sync_pull.cpp)
 target_link_libraries(unit_tests PRIVATE rl_core)
 
 # Benchmark (Contains benchmarks/FixedWindowBench.cpp's main)

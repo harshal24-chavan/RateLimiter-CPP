@@ -156,4 +156,8 @@ void SyncManager::pullGlobalStates(
 
   std::vector<std::optional<std::string>> res;
   _redis->mget(keys.begin(), keys.end(), std::back_inserter(res));
+
+  // please do not forget you have to apply the
+  // updateGlobalCount of strategy to actually get the global data into your
+  // local hash map
 }
