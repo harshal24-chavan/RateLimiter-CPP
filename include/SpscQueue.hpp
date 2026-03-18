@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <stdatomic.h>
 
 static constexpr size_t RING_BUFFER_SIZE = 16384; // 2^14
 static constexpr size_t MASK = RING_BUFFER_SIZE - 1;
@@ -40,8 +41,15 @@ public:
     return (writePos - readPos) == RING_BUFFER_SIZE;
   }
 
+  // for internal working of the spsc queue
   bool isEmpty(uint64_t writePos, uint64_t readPos) {
     return writePos == readPos;
+  }
+
+  // for others to check if empty
+  bool isEmpty() {
+    return write_pos.load(std::memory_order_relaxed) ==
+           read_pos.load(std::memory_order_relaxed);
   }
 
   bool push(const T &item) {

@@ -93,10 +93,14 @@ int main(int argc, char **argv) {
 
   std::cout << "ok" << std::endl;
 
-  // 4. Start gRPC Server
+  // Start Sync Manager background Thread for flush and pull of global states
   size_t threadCount = 2;
   std::shared_ptr<SyncManager> syncManager = std::make_shared<SyncManager>(
       threadCount, rules.size(), redis, epRegistry);
+
+  std::thread syncWorkerThread([&]() { syncManager->run(); });
+
+  // 4. Start gRPC Server
 
   std::string server_address = "0.0.0.0:" + std::to_string(port);
   // 3 threads for GRPC server and 1 thread for SyncManager to sync with redis
@@ -115,6 +119,11 @@ int main(int argc, char **argv) {
   std::cout << "calling server.Run()" << std::endl;
   std::cout << "SERVER VERSION 2.0 - BATCHING" << std::endl;
   server.Run(grpcport, threadCount);
-  std::cout << "ended?" << std::endl;
+
+  // 5. CLEANUP
+  // The server has stopped, so we should stop the sync thread
+  if (syncWorkerThread.joinable()) {
+    syncWorkerThread.join();
+  }
   return 0;
 }

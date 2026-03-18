@@ -55,6 +55,7 @@ add_library(rl_core STATIC
     src/FixedWindow.cpp
     src/TokenBucket.cpp
     src/RateLimitFactory.cpp
+    src/SyncManager.cpp
     src/GRPC-RateLimiter.cpp
     "${GEN_PB_SRC}"   
     "${GEN_GRPC_SRC}" 
