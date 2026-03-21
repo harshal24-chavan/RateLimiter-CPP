@@ -1,3 +1,4 @@
+![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
 # RateLimiter-CPP
 
 A high-performance, distributed rate-limiting service built with C++20 and gRPC. Designed to achieve massive throughput on legacy hardware through lock-free concurrency and asynchronous I/O with batching.
