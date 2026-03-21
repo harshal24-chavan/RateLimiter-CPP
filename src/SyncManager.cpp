@@ -7,12 +7,16 @@
 #include <sw/redis++/queued_redis.h>
 #include <thread>
 
-SyncManager::SyncManager(size_t threadCount, size_t epc,
-                         std::shared_ptr<sw::redis::Redis> redis,
-                         std::shared_ptr<EndPointRegistry> registry)
-    : _redis(std::move(redis)), _endPointRegistry(std::move(registry)),
-      endpointCount(epc) {
+static std::atomic<int> global_thread_counter{0};
+static thread_local int my_assigned_lane = -1;
 
+SyncManager::SyncManager(
+    size_t threadCount, size_t epc, std::shared_ptr<sw::redis::Redis> redis,
+    std::shared_ptr<EndPointRegistry> registry,
+    std::shared_ptr<std::unordered_map<std::string, EndpointContext>>
+        StrategyMAP)
+    : _redis(std::move(redis)), _endPointRegistry(std::move(registry)),
+      _strategyMap(std::move(StrategyMAP)), endpointCount(epc) {
   queueList.reserve(threadCount);
   for (size_t i = 0; i < threadCount; i++) {
     queueList.emplace_back(std::make_unique<SPSCQueue<SyncTask>>());
@@ -27,48 +31,56 @@ size_t SyncManager::getLane() {
   return lane;
 }
 
+// bool SyncManager::pushTask(size_t &ind, SyncTask &item) {
+//   return queueList[ind]->push(std::move(item));
+// }
+
 bool SyncManager::pushTask(size_t &ind, SyncTask &item) {
-  return queueList[ind]->push(std::move(item));
+  // Every thread gets an ID the first time it calls this
+  if (my_assigned_lane == -1) {
+    my_assigned_lane =
+        global_thread_counter.fetch_add(1, std::memory_order_relaxed);
+  }
+
+  // 2. Safety check: did we spawn more threads than we have queues?
+  if (my_assigned_lane >= queueList.size()) {
+    return false;
+  }
+
+  return queueList[my_assigned_lane]->push(std::move(item));
 }
 
 void SyncManager::run() {
-
-  auto queuesHaveData = [this]() {
-    for (auto &lane : queueList) {
-      if (!lane->isEmpty())
-        return true;
-    }
-    return false;
-  };
-
-  // 1. Pre-allocate aggregation tables to avoid runtime allocations
+  // 1. Setup
   std::vector<std::unordered_map<uint64_t, uint32_t>> aggregationTable(
       endpointCount);
-  for (auto &map : aggregationTable) {
+  for (auto &map : aggregationTable)
     map.reserve(10000);
-  }
 
   auto lastFlush = std::chrono::steady_clock::now();
   std::vector<std::pair<std::string, uint64_t>> priorityUsers;
+  bool hasPendingData = false;
 
   std::cout << "SyncManager: Consumer thread started." << std::endl;
 
-  while (running.load(std::memory_order_relaxed) || queuesHaveData()) {
+  // Use a single loop logic that handles both running and draining
+  while (true) {
+    bool isRunning = running.load(std::memory_order_relaxed);
     bool activity = false;
 
-    // 2. Poll all lanes for tasks
+    // 2. Poll all lanes
     for (auto &lane : queueList) {
       SyncTask task;
       while (lane->pop(task)) {
         activity = true;
-        uint32_t newLocalCount =
+        hasPendingData = true;
+        uint32_t newCount =
             (aggregationTable[task.endpoint_id][task.user_id_hash] +=
              task.increment);
 
-        // Check if we need to pull global state for high-volume users
-        int endPointLimit =
-            _endPointRegistry->getEndPointLimit(task.endpoint_id);
-        if (newLocalCount >= endPointLimit * 0.8) {
+        // Priority Check
+        int limit = _endPointRegistry->getEndPointLimit(task.endpoint_id);
+        if (newCount >= limit * 0.8) {
           priorityUsers.push_back(
               {_endPointRegistry->getEndPointString(task.endpoint_id),
                task.user_id_hash});
@@ -76,35 +88,41 @@ void SyncManager::run() {
       }
     }
 
-    // 3. Periodic Flush to Redis (every 5ms)
+    // 3. Flush Logic
     auto now = std::chrono::steady_clock::now();
-    bool shouldFlush =
+    auto elapsed =
         std::chrono::duration_cast<std::chrono::milliseconds>(now - lastFlush)
-            .count() >= 5;
+            .count();
 
-    if (shouldFlush || (!running.load() && activity)) {
-      if (activity) {
-        flushToRedis(aggregationTable);
+    // Flush if: 50ms passed OR we are shutting down and have data
+    if (hasPendingData && (elapsed >= 50 || !isRunning)) {
+      flushToRedis(aggregationTable);
+      for (auto &map : aggregationTable)
+        map.clear();
 
-        // Clear maps but keep the capacity reserved
-        for (auto &map : aggregationTable)
-          map.clear();
-
-        // Optional: Process priority users if needed
-        if (!priorityUsers.empty()) {
-          pullGlobalStates(priorityUsers);
-          priorityUsers.clear();
-        }
+      if (!priorityUsers.empty()) {
+        pullGlobalStates(priorityUsers);
+        priorityUsers.clear();
       }
+
       lastFlush = now;
+      hasPendingData = false;
     }
 
-    // 4. Congestion control: Yield if no work was found
-    if (!activity) {
-      std::this_thread::yield();
+    // 4. Exit Condition: Not running AND no more data in lanes AND no pending
+    // aggregation
+    if (!isRunning && !activity && !hasPendingData) {
+      break;
+    }
+
+    // 5. Congestion Control
+    if (!activity && isRunning) {
+      std::this_thread::sleep_for(std::chrono::microseconds(100));
     }
   }
-  std::cout << "SyncManager: Consumer thread shutting down." << std::endl;
+
+  std::cout << "SyncManager: Consumer thread shutting down cleanly."
+            << std::endl;
 }
 
 void SyncManager::stop() {
@@ -157,7 +175,19 @@ void SyncManager::pullGlobalStates(
   std::vector<std::optional<std::string>> res;
   _redis->mget(keys.begin(), keys.end(), std::back_inserter(res));
 
-  // please do not forget you have to apply the
-  // updateGlobalCount of strategy to actually get the global data into your
-  // local hash map
+  for (size_t ind = 0; ind < res.size(); ind++) {
+    if (res[ind].has_value()) {
+      std::string ep = priorityUsers[ind].first;
+      uint64_t userID = priorityUsers[ind].second;
+
+      // 1. Convert Redis string to integer
+      uint32_t globalCount = std::stoul(*res[ind]);
+
+      // 2. Lookup strategy
+      auto it = _strategyMap->find(ep);
+      if (it != _strategyMap->end()) {
+        it->second.strategy->updateGlobalCount(userID, globalCount);
+      }
+    }
+  }
 }

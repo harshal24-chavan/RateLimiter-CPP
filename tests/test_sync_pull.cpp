@@ -14,7 +14,8 @@ void test_pull_global_logic() {
   auto redis = std::make_shared<sw::redis::Redis>("tcp://127.0.0.1:6379");
   auto registry = std::make_shared<EndPointRegistry>(rules);
 
-  SyncManager sync(1, 1, redis, registry);
+  // have to update this
+  SyncManager sync(1, 1, redis, registry, sm);
 
   // 2. Seed Redis: Manually set a count for a specific user
   uint64_t testUserHash = 99999;

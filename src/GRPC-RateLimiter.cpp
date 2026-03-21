@@ -23,25 +23,36 @@ void RateLimitAsyncServer::Run(int port, int threadCount) {
   cq_ = builder.AddCompletionQueue();
   server_ = builder.BuildAndStart();
 
+  std::cout << "GRPC Server listening on " << server_address << std::endl;
+
   HandleRpcs(threadCount);
 }
 
 void RateLimitAsyncServer::HandleRpcs(int threadCount) {
   std::vector<std::thread> workers;
-  for (size_t i = 0; i < (size_t)threadCount; ++i) {
+
+  for (int i = 0; i < threadCount; ++i) {
     workers.emplace_back([this, i]() {
-      new CallData(&service_, cq_.get(), strategies_, syncManager_, i);
+      // 1. SEED: Create the first CallData for this thread.
+      auto *first_call =
+          new CallData(&service_, cq_.get(), strategies_, syncManager_);
+      first_call->setLane(i);
+      first_call->Proceed(true);
+
       void *tag;
       bool ok;
+
+      // 2. POLL: The shared queue
       while (cq_->Next(&tag, &ok)) {
-        if (!ok)
-          break;
-        static_cast<CallData *>(tag)->Proceed();
+        if (tag)
+          static_cast<CallData *>(tag)->Proceed(ok);
       }
     });
   }
-  for (auto &t : workers)
+
+  for (auto &t : workers) {
     t.join();
+  }
 }
 
 // CallData Implementation
@@ -49,45 +60,51 @@ RateLimitAsyncServer::CallData::CallData(
     RateLimitService::AsyncService *service, grpc::ServerCompletionQueue *cq,
     std::shared_ptr<std::unordered_map<std::string, EndpointContext>>
         strategies,
-    std::shared_ptr<SyncManager> syncManager, size_t threadLane)
+    std::shared_ptr<SyncManager> syncManager)
     : service_(service), cq_(cq), strategies_(strategies),
-      syncManager_(syncManager), responder_(&ctx_), status_(CREATE),
-      lane_(threadLane) {
-  Proceed();
-}
+      syncManager_(syncManager), responder_(&ctx_), status_(CREATE) {}
 
-void RateLimitAsyncServer::CallData::Proceed() {
+void RateLimitAsyncServer::CallData::Proceed(bool ok) {
+  // 1. If the event failed (client disconnect, shutdown, etc.)
+  if (!ok) {
+    // If we were waiting for a request, we MUST spawn a replacement
+    // before dying, or the "listening pool" shrinks by one.
+    if (status_ == PROCESS) {
+      auto *next_call = new CallData(service_, cq_, strategies_, syncManager_);
+      next_call->setLane(lane_);
+      next_call->Proceed(true);
+    }
+    delete this;
+    return;
+  }
+
   if (status_ == CREATE) {
     status_ = PROCESS;
     service_->RequestCheckBatch(&ctx_, &request_, &responder_, cq_, cq_, this);
   } else if (status_ == PROCESS) {
+    // 2. CHAIN REACTION: Spawn the NEXT listener immediately
+    auto *next_call = new CallData(service_, cq_, strategies_, syncManager_);
+    next_call->setLane(lane_); // CRITICAL: Keep the thread in its lane
+    next_call->Proceed(true);  // Kickstart the next one
 
-    new CallData(service_, cq_, strategies_, syncManager_, lane_);
-
+    // 3. LOGIC: Handle the current request
     const std::string &endpoint = request_.endpoint();
     auto it = strategies_->find(endpoint);
 
-    // std::cout << endpoint << std::endl;
-
     if (it == strategies_->end()) {
       status_ = FINISH;
-      responder_.Finish(
-          response_,
-          grpc::Status(grpc::StatusCode::NOT_FOUND, "Endpoint not found"),
-          this);
+      responder_.Finish(response_,
+                        grpc::Status(grpc::StatusCode::NOT_FOUND, "Not Found"),
+                        this);
       return;
     }
 
-    auto &requests = request_.checks();
-    response_.mutable_results()->Reserve(requests.size());
-
-    for (const auto &check : requests) {
+    // Process batch...
+    for (const auto &check : request_.checks()) {
       uint64_t hashedId = HashUtils::hashID(check.user_id());
       auto result = it->second.strategy->isAllowed(hashedId);
-
       auto *res = response_.add_results();
       res->set_allowed(result.allowed);
-      res->set_remaining_tokens(result.remaining);
 
       if (result.allowed) {
         SyncTask st = {hashedId, it->second.id, 1};
@@ -98,6 +115,7 @@ void RateLimitAsyncServer::CallData::Proceed() {
     status_ = FINISH;
     responder_.Finish(response_, grpc::Status::OK, this);
   } else {
+    // status_ is FINISH. gRPC is done with us.
     delete this;
   }
 }

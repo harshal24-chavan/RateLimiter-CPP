@@ -30,7 +30,7 @@ cd ..
 # 7. Run the Benchmark
 echo "--- running the RateLimiter ---"
 if [ -f "./build/RateLimiterServer" ]; then
-    ./build/RateLimiterServer
+    TSAN_OPTIONS="suppressions=suppressions.txt" ./build/RateLimiterServer
 else
     echo "Error: RateLimiterServer binary not found!"
     exit 1

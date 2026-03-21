@@ -20,16 +20,9 @@ RateLimitResult FixedWindow::isAllowed(uint64_t userHash) {
   size_t shardIndex = (numOfShards - 1) & userHash;
   Shard &shard = (*shards)[shardIndex];
 
-  // std::cout << shardIndex << std::endl;
-
   // locking the mutex for this particular map
   // so that other maps are readily available
   std::lock_guard<std::mutex> lck(shard.mtx);
-
-  // if (cnt < 10) {
-  //   std::cout << userHash << " asdf " << shardIndex << std::endl;
-  //   cnt++;
-  // }
 
   // Reset: If time has moved to a new window, clear this shard
   int64_t currentWindow = getCurrentWindowId();

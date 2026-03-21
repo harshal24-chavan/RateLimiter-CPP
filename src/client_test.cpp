@@ -40,23 +40,24 @@ public:
   explicit RateLimitAsyncClient(std::shared_ptr<Channel> channel)
       : stub_(RateLimitService::NewStub(channel)) {}
 
-  void CheckBatch(const std::vector<std::string> &users,
+  ~RateLimitAsyncClient() {
+    cq_.Shutdown();
+    // The reader thread join in run_batch_benchmark ensures this is safe
+  }
+
+  void CheckBatch(const std::vector<std::string> &full_pool, int start_idx,
                   const std::string &endpoint) {
     BatchCheckRequest request;
     request.set_endpoint(endpoint);
 
-    // Fill the batch
-    for (const auto &user_id : users) {
+    for (int i = 0; i < BATCH_SIZE; ++i) {
       auto *check = request.add_checks();
-      check->set_user_id(user_id);
+      check->set_user_id(full_pool[start_idx + i]);
     }
 
     AsyncClientCall *call = new AsyncClientCall;
-
-    // Use the new CheckBatch RPC
     call->response_reader =
         stub_->PrepareAsyncCheckBatch(&call->context, request, &cq_);
-
     call->response_reader->StartCall();
     call->response_reader->Finish(&call->response, &call->status, (void *)call);
   }
@@ -66,25 +67,28 @@ public:
     bool ok = false;
     int processed_batches = 0;
 
-    while (processed_batches < total_expected_batches &&
-           cq_.Next(&got_tag, &ok)) {
+    // Ensure we check 'ok' correctly for queue shutdown
+    while (cq_.Next(&got_tag, &ok)) {
+      if (!ok)
+        break; // Queue is shutting down
+
       AsyncClientCall *call = static_cast<AsyncClientCall *>(got_tag);
 
-      if (ok && call->status.ok()) {
-        // Process each result in the batch response
+      if (call->status.ok()) {
         for (const auto &res : call->response.results()) {
-          if (res.allowed()) {
-            allowed_user_checks++;
-          }
+          if (res.allowed())
+            allowed_user_checks.fetch_add(1, std::memory_order_relaxed);
         }
-      } else if (!call->status.ok()) {
-        std::cerr << "RPC Failed: " << call->status.error_message()
-                  << std::endl;
       }
 
       delete call;
-      batches_in_flight--;
+      batches_in_flight.fetch_sub(1, std::memory_order_relaxed);
       processed_batches++;
+
+      if (processed_batches >= total_expected_batches) {
+        // We've got everything, we can stop polling
+        break;
+      }
     }
   }
 
@@ -95,36 +99,39 @@ private:
 
 void run_batch_benchmark(int thread_id, int total_users_to_check,
                          std::string target) {
+
+  std::vector<std::string> user_pool;
+  user_pool.reserve(total_users_to_check);
+
+  for (int i = 0; i < total_users_to_check; ++i) {
+    // Generate unique IDs once
+    user_pool.push_back("user_" + std::to_string(thread_id) + "_" +
+                        std::to_string(i));
+  }
+
   auto channel =
       grpc::CreateChannel(target, grpc::InsecureChannelCredentials());
   RateLimitAsyncClient client(channel);
-
   int total_batches = total_users_to_check / BATCH_SIZE;
 
   // Reader thread expects total_batches
   std::thread reader(&RateLimitAsyncClient::AsyncCompleteRpc, &client,
                      total_batches);
 
-  std::string endpoint = "/api/v1/login";
+  std::string endpoint = "/api/v1/search";
 
   for (int b = 0; b < total_batches; ++b) {
     // Backpressure based on batches
-    while (batches_in_flight.load() >= MAX_IN_FLIGHT_BATCHES) {
+    while (batches_in_flight.load(std::memory_order_relaxed) >=
+           MAX_IN_FLIGHT_BATCHES) {
       std::this_thread::yield();
     }
 
-    std::vector<std::string> user_batch;
-    user_batch.reserve(BATCH_SIZE);
+    int start_idx = b * BATCH_SIZE;
 
-    for (int i = 0; i < BATCH_SIZE; ++i) {
-      // Unique user IDs to avoid perfect cache hits if desired
-      user_batch.push_back("user_" + std::to_string(thread_id) + "_" +
-                           std::to_string(i * BATCH_SIZE));
-    }
-
-    batches_in_flight++;
-    client.CheckBatch(user_batch, endpoint);
-    total_user_checks += BATCH_SIZE;
+    batches_in_flight.fetch_add(1, std::memory_order_relaxed);
+    client.CheckBatch(user_pool, start_idx, endpoint);
+    total_user_checks.fetch_add(BATCH_SIZE, std::memory_order_relaxed);
   }
 
   if (reader.joinable())
@@ -158,7 +165,7 @@ int main(int argc, char **argv) {
   auto end = std::chrono::high_resolution_clock::now();
   std::chrono::duration<double> elapsed = end - start;
 
-  double user_rps = total_user_checks / elapsed.count();
+  double user_rps = total_user_checks.load() / elapsed.count();
 
   std::cout << "-------------------------------------------" << std::endl;
   std::cout << "Benchmark Results:" << std::endl;

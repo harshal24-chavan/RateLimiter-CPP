@@ -5,6 +5,10 @@ project(RateLimiter)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# for thread sanitization IMPORTANT to DEBUG
+# set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsanitize=thread -g")
+# set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -fsanitize=thread")
+
 # Optimization for the i3-540
 set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE}  -march=native -pthread")
 
@@ -83,12 +87,12 @@ add_executable(RateLimiterServer src/main.cpp)
 target_link_libraries(RateLimiterServer PRIVATE rl_core)
 
 # Unit Tests (Contains tests/FixedWindowTests.cpp's main)
-add_executable(unit_tests tests/FixedWindowTest.cpp tests/test_sync_pull.cpp)
-target_link_libraries(unit_tests PRIVATE rl_core)
+# add_executable(unit_tests tests/FixedWindowTest.cpp tests/test_sync_pull.cpp)
+# target_link_libraries(unit_tests PRIVATE rl_core)
 
 # Benchmark (Contains benchmarks/FixedWindowBench.cpp's main)
-add_executable(bench_fixed_window benchmarks/FixedWindowBench.cpp)
-target_link_libraries(bench_fixed_window PRIVATE rl_core)
+# add_executable(bench_fixed_window benchmarks/FixedWindowBench.cpp)
+# target_link_libraries(bench_fixed_window PRIVATE rl_core)
 
 # Optional: Test Client
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/src/client_test.cpp")

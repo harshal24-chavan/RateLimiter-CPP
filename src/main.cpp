@@ -91,12 +91,10 @@ int main(int argc, char **argv) {
     }
   }
 
-  std::cout << "ok" << std::endl;
-
   // Start Sync Manager background Thread for flush and pull of global states
   size_t threadCount = 2;
   std::shared_ptr<SyncManager> syncManager = std::make_shared<SyncManager>(
-      threadCount, rules.size(), redis, epRegistry);
+      threadCount, rules.size(), redis, epRegistry, strategyMap);
 
   std::thread syncWorkerThread([&]() { syncManager->run(); });
 
@@ -109,15 +107,13 @@ int main(int argc, char **argv) {
 
   RateLimitAsyncServer server(strategyMap, syncManager);
 
+  std::cout << "SERVER VERSION 2.0 - BATCHING" << std::endl;
+
   // This call is BLOCKING. It will:
   // - Build the server
   // - Create a CompletionQueue
   // - Start 3 worker threads (grpcThreads)
   // - Handle the event loop
-  redis->set("HANDSHAKE_TEST", "ALIVE"); // Direct write
-                                         //
-  std::cout << "calling server.Run()" << std::endl;
-  std::cout << "SERVER VERSION 2.0 - BATCHING" << std::endl;
   server.Run(grpcport, threadCount);
 
   // 5. CLEANUP

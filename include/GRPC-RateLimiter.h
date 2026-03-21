@@ -9,6 +9,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "EndPointRegistry.h"
 #include "IRateLimitStrategy.h"
 #include "SyncManager.h"
 
@@ -17,11 +18,6 @@ namespace ratelimiter {
 class BatchCheckRequest;
 class BatchCheckResponse;
 } // namespace ratelimiter
-
-struct EndpointContext {
-  uint32_t id;
-  std::unique_ptr<IRateLimitStrategy> strategy;
-};
 
 class RateLimitAsyncServer {
 public:
@@ -41,9 +37,11 @@ private:
              grpc::ServerCompletionQueue *cq,
              std::shared_ptr<std::unordered_map<std::string, EndpointContext>>
                  strategies,
-             std::shared_ptr<SyncManager> syncManager, size_t threadLane);
+             std::shared_ptr<SyncManager> syncManager);
 
-    void Proceed();
+    void Proceed(bool ok);
+
+    void setLane(size_t lane) { lane_ = lane; }
 
   private:
     ratelimiter::RateLimitService::AsyncService *service_;
@@ -57,7 +55,7 @@ private:
     ratelimiter::BatchCheckResponse response_;
     grpc::ServerAsyncResponseWriter<ratelimiter::BatchCheckResponse> responder_;
 
-    size_t lane_;
+    size_t lane_ = 0;
     enum CallStatus { CREATE, PROCESS, FINISH };
     CallStatus status_;
   };

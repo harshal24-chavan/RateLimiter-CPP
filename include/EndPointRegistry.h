@@ -2,14 +2,21 @@
 
 #include "tomlParser.h"
 
+#include "IRateLimitStrategy.h"
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <unordered_map>
 #include <vector>
+
+struct EndpointContext {
+  uint32_t id;
+  std::unique_ptr<IRateLimitStrategy> strategy;
+};
 
 class EndPointRegistry {
 private:

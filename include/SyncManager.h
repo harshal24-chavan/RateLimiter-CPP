@@ -15,7 +15,9 @@ class SyncManager {
 public:
   SyncManager(size_t threadCount, size_t epc,
               std::shared_ptr<sw::redis::Redis> redis,
-              std::shared_ptr<EndPointRegistry> registry);
+              std::shared_ptr<EndPointRegistry> registry,
+              std::shared_ptr<std::unordered_map<std::string, EndpointContext>>
+                  StrategyMAP);
 
   // Thread-safe lane assignment for gRPC worker threads
   size_t getLane();
@@ -44,4 +46,7 @@ private:
 
   std::atomic<size_t> index{0};
   size_t endpointCount;
+
+  std::shared_ptr<std::unordered_map<std::string, EndpointContext>>
+      _strategyMap;
 };
