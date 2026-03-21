@@ -1,55 +1,51 @@
+# RateLimiter-CPP
 
-# 🚀 High-Performance C++ Rate Limiter
+A high-performance, distributed rate-limiting service built with C++20 and gRPC. Designed to achieve massive throughput on legacy hardware through lock-free concurrency and asynchronous I/O with batching.
 
-A distributed, low-latency Rate Limiting service built with **C++20**, **gRPC**, and **Redis**. This service implements multiple rate-limiting algorithms and is designed to handle thousands of requests per second with sub-30ms tail latency.
+## 🚀 Performance Highlights
 
+Validated on an Intel Core i3-540 (2 Cores, 4 Threads @ 3.06 GHz) during a 1-hour continuous burn-in test:
 
+- **Peak Throughput:** 180,000+ user checks per second.
 
-## ✨ Features
+- **Low Latency:** ≈0.27 ms fastest response time.
 
-* **High Performance:** Benchmarked at ~7,000 RPS with a **p99 of 27ms**.
-* **Dual Algorithms:** Supports both **Fixed Window** and **Token Bucket** strategies.
-* **Atomic Operations:** Uses **Lua scripting** in Redis to prevent race conditions and ensure thread safety.
-* **Dynamic Configuration:** Fully driven by a `config.toml` file for easy rule management.
-* **Production Ready:** Multi-stage Docker builds (Debian Slim) for a lightweight footprint.
-* **Extensible:** Strategy and Factory patterns make adding new algorithms (e.g., Leaky Bucket) seamless.
+- **Stability:** Stable 30MB RSS memory footprint (zero leaks).
 
----
+- **Reliability:** 99.99% success rate over 450 million processed checks.
 
-## 🛠 Tech Stack
+## 🏗 Architecture
 
-* **Language:** C++20
-* **Communication:** gRPC / Protocol Buffers
-* **Database:** Redis (using `redis-plus-plus` & `hiredis`)
-* **Config:** `tomlplusplus`
-* **Infrastructure:** Docker & Docker Compose
-* **Build System:** CMake & Ninja
+#### Key Design Patterns
 
----
+- **Asynchronous gRPC State Machine:** Utilizes the C++ CompletionQueue and a CallData lifecycle to handle thousands of concurrent streams without thread-per-request overhead.
 
-## 📊 Performance Benchmarks
+- **Lock-Free SPSC Lanes:** Each worker thread possesses a dedicated Single Producer Single Consumer (SPSC) queue. This eliminates mutex contention when passing data to the synchronization layer.
 
-Tested using `ghz` on a local Dockerized environment:
+- **Aggregated Redis Pipelining:** The SyncManager thread polls all lanes, aggregates increments in local thread-safe maps, and flushes to Redis using high-speed pipelines every 50ms.
 
-| Metric | Result |
-| :--- | :--- |
-| **Total Requests** | 20,000 |
-| **Concurrency** | 50 concurrent workers |
-| **Requests/sec** | **6,939.21** |
-| **Average Latency** | 13.94 ms |
-| **p99 Latency** | **26.10 ms** |
+- **Micro-Sleep Backpressure:** Replaced aggressive **yield** with calibrated **micro-sleeps** (100μs) to prevent core starvation on dual-core systems.
 
+## 📊 Benchmarks
 
-<img width="581" height="557" alt="image" src="https://github.com/user-attachments/assets/06d42c40-4cf0-463b-bf79-05cdd2abbcce" />
+#### Throughput = Requests per Second (RPS) × Batch Size
+|Batch Size	|Avg. RPS	|Total Users/sec	|Avg. Latency| p99 Latency|
+|:----|----:|----:|----:|----:|
+|10 Users|	~8,400|	84,000	|6.0 ms| ~18ms|
+|50 Users|	~3,300|	165,000	|14.5 ms| ~42 ms|
+|100 Users|	~1,800|	180,000	|27.5 ms|~85 ms|
 
----
+## 🛠 Prerequisites
+#### If running without docker:
+1. gRPC & Protobuf: v1.50+
+2. Redis: v6.0+
+3. C++ Compiler: GCC 11+ or Clang 14+
+4. Libraries: redis-plus-plus, hiredis
+#### With docker:
+1. Docker & Docker Compose
 
-## 🚀 Getting Started
-
-### Prerequisites
-* Docker & Docker Compose
-
-### Running with Docker (Recommended)
+## 🔨 Build Instructions
+#### Running with Docker (Recommended)
 1.  Clone the repository:
     ```bash
     git clone https://github.com/harshal24-chavan/rate-limiter-cpp.git
@@ -61,8 +57,17 @@ Tested using `ghz` on a local Dockerized environment:
     ```
 3.  The gRPC server will be listening on `localhost:50051`.
 
----
 
+#### manually
+```Bash
+mkdir build && cd build
+cmake ..
+make -j$(nproc)
+```
+#### using build script:
+```Bash
+chmod +x ./BUILD.sh && ./BUILD.sh
+```
 ## ⚙️ Configuration
 
 Rules are defined in `config.toml`. You can map specific endpoints to different strategies:
@@ -87,40 +92,59 @@ strategy_type = "fixed_window"
 limit = 100
 interval = 3600
 ```
+## 🧪 Running Benchmarks
 
-## 📂 Project Structure 
-```bash
-├── proto/ |
-	└── ratelimiter.proto # gRPC Service and Message definitions 
-├── include/ │ 
-	├── IRateLimitStrategy.h # Interface for rate limit algorithms │ 
-	├── FixedWindow.h # Fixed Window implementation │ 
-	├── TokenBucket.h # Token Bucket implementation │ 
-	├── RateLimitFactory.h # Factory for strategy instantiation │ 
-	└── tomlParser.h # Config parsing logic 
-├── src/ │ 
-	├── main.cpp # gRPC Server implementation & Entry point │ 
-	├── FixedWindow.cpp │ 
-	├── TokenBucket.cpp │ 
-	└── tomlParser.cpp 
-├── config.toml # User-defined rate limit rules 
-├── Dockerfile # Multi-stage production build 
-├── docker-compose.yml # App + Redis stack orchestration 
-└── CMakeLists.txt # Build configuration
+Use ghz to stress-test the server. For the most stable results on dual-core hardware, use taskset to pin the server to specific cores.
+
+#### Start the Server:
+```Bash
+cd build
+taskset -c 0,1 ./RateLimiterServer
 ```
-# 🧪 Testing & Benchmarking
 
-## Load Benchmark
-Use `ghz` to measure throughput and tail latency (p99):
+#### Run 50-User Batch Test:
 
-```bash
+```Bash
+
 ghz --insecure \
-    --proto ./proto/ratelimit.proto \
-    --call ratelimiter.RateLimitService/Check \
-    -d '{"user_id":"bench_user","endpoint":"/api/v1/login"}' \
-    -n 20000 -c 50 \
-    localhost:50051
+  --proto ./proto/ratelimit.proto \
+  --call ratelimiter.RateLimitService/CheckBatch \
+  -D ./mid_data.json \
+  -c 50 -z 30s \
+  localhost:50051
 ```
-## 🛡️ License
+## WorkFlow:
+```mermaid
+graph TD
+    subgraph Client Layer
+        C[gRPC Clients / ghz]
+    end
 
-Distributed under the MIT License. See `LICENSE` for more information.
+    subgraph "RateLimiter-CPP"
+        direction TB
+        LB[gRPC Completion Queue]
+        W1[Worker Thread 1]
+        W2[Worker Thread 2]
+        Q1[[SPSC Lane 1]]
+        Q2[[SPSC Lane 2]]
+        SM[SyncManager Thread]
+        Agg[(Local Aggregation Table)]
+    end
+
+    subgraph Storage Layer
+        R[(Redis Instance)]
+    end
+
+    C -->|CheckBatch RPC| LB
+    LB --> W1
+    LB --> W2
+    W1 -->|Push SyncTask| Q1
+    W2 -->|Push SyncTask| Q2
+    Q1 --> SM
+    Q2 --> SM
+    SM --> Agg
+    Agg -->|Pipelined FLUSH| R
+```
+
+## ⚖️ License
+This project is licensed under the **MIT License**. See the [LICENSE](LICENSE) file for the full text.
