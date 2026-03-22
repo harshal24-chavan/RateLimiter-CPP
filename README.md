@@ -149,3 +149,10 @@ graph TD
 
 ## ⚖️ License
 This project is licensed under the **MIT License**. See the [LICENSE](LICENSE) file for the full text.
+
+## Things to improve
+[ ] 1. Redis doesn't have Time to Live (TTL) for any data.
+
+[ ] 2. Implement token bucket algorithm.
+
+[ ] 3. Improve code quality
