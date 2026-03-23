@@ -42,7 +42,7 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /usr/local/bin
 
-COPY --from=builder /app/Build/RateLimiter .
+COPY --from=builder /app/Build/RateLimiterServer .
 COPY config.toml .
 
 # Copy redis++ (this one usually works as .so)
@@ -53,4 +53,4 @@ COPY --from=builder /usr/local/lib/libredis++.so* /usr/local/lib/
 RUN ldconfig
 
 EXPOSE 50051
-CMD ["./RateLimiter"]
+CMD ["./RateLimiterServer"]
